@@ -1,25 +1,14 @@
 version: 2
 updates:
-  - package-ecosystem: "npm"
-    directory: "/"
+  - package-ecosystem: "gomod"
+    directory: "/"  # Pfad zu go.mod
     schedule:
       interval: "daily"
     open-pull-requests-limit: 10
     groups:
-      production-dependencies:
+      go-dependencies:
         patterns:
-          - "*"
-        update-types:
-          - "minor"
-          - "patch"
-      major-updates:
-        patterns:
-          - "*"
-        update-types:
-          - "major"
-    labels:
-      - "dependencies"
-      - "bot"
+          - "*"  # Gruppiert alle Go-Abhängigkeiten
     commit-message:
       prefix: "deps"
       include: "scope"
@@ -33,6 +22,6 @@ updates:
       docker-updates:
         patterns:
           - "*"
-    labels:
-      - "docker"
-      - "dependencies"
+    commit-message:
+      prefix: "deps"
+      include: "scope"
