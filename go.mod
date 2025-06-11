@@ -2,7 +2,7 @@ module github.com/fosrl/newt
 
 go 1.23.1
 
-toolchain go1.23.2
+toolchain go1.24.4
 
 require (
 	github.com/docker/docker v28.2.2+incompatible
