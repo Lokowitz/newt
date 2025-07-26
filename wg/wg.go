@@ -4,6 +4,7 @@ package wg
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -62,7 +63,7 @@ type WireGuardService struct {
 	host          string
 	serverPubKey  string
 	token         string
-	stopGetConfig chan struct{}
+	stopGetConfig func()
 }
 
 // Add this type definition
@@ -181,14 +182,21 @@ func NewWireGuardService(interfaceName string, mtu int, generateAndSaveKeyTo str
 		host:          host,
 		lastReadings:  make(map[string]PeerReading),
 		stopHolepunch: make(chan struct{}),
-		stopGetConfig: make(chan struct{}),
 	}
 
 	// Get the existing wireguard port (keep this part)
 	device, err := service.wgClient.Device(service.interfaceName)
 	if err == nil {
 		service.Port = uint16(device.ListenPort)
-		logger.Info("WireGuard interface %s already exists with port %d\n", service.interfaceName, service.Port)
+		if service.Port != 0 {
+			logger.Info("WireGuard interface %s already exists with port %d\n", service.interfaceName, service.Port)
+		} else {
+			service.Port, err = FindAvailableUDPPort(49152, 65535)
+			if err != nil {
+				fmt.Printf("Error finding available port: %v\n", err)
+				return nil, err
+			}
+		}
 	} else {
 		service.Port, err = FindAvailableUDPPort(49152, 65535)
 		if err != nil {
@@ -214,11 +222,9 @@ func NewWireGuardService(interfaceName string, mtu int, generateAndSaveKeyTo str
 }
 
 func (s *WireGuardService) Close(rm bool) {
-	select {
-	case <-s.stopGetConfig:
-		// Already closed, do nothing
-	default:
-		close(s.stopGetConfig)
+	if s.stopGetConfig != nil {
+		s.stopGetConfig()
+		s.stopGetConfig = nil
 	}
 
 	s.wgClient.Close()
@@ -244,16 +250,12 @@ func (s *WireGuardService) SetToken(token string) {
 }
 
 func (s *WireGuardService) LoadRemoteConfig() error {
-	// Send the initial message
-	err := s.sendGetConfigMessage()
-	if err != nil {
-		logger.Error("Failed to send initial get-config message: %v", err)
-		return err
-	}
+	s.stopGetConfig = s.client.SendMessageInterval("newt/wg/get-config", map[string]interface{}{
+		"publicKey": fmt.Sprintf("%s", s.key.PublicKey().String()),
+		"port":      s.Port,
+	}, 2*time.Second)
 
-	// Start goroutine to periodically send the message until config is received
-	go s.keepSendingGetConfig()
-
+	logger.Info("Requesting WireGuard configuration from remote server")
 	go s.periodicBandwidthCheck()
 
 	return nil
@@ -262,7 +264,8 @@ func (s *WireGuardService) LoadRemoteConfig() error {
 func (s *WireGuardService) handleConfig(msg websocket.WSMessage) {
 	var config WgConfig
 
-	logger.Info("Received message: %v", msg)
+	logger.Debug("Received message: %v", msg)
+	logger.Info("Received WireGuard clients configuration from remote server")
 
 	jsonData, err := json.Marshal(msg.Data)
 	if err != nil {
@@ -276,7 +279,10 @@ func (s *WireGuardService) handleConfig(msg websocket.WSMessage) {
 	}
 	s.config = config
 
-	close(s.stopGetConfig)
+	if s.stopGetConfig != nil {
+		s.stopGetConfig()
+		s.stopGetConfig = nil
+	}
 
 	// Ensure the WireGuard interface and peers are configured
 	if err := s.ensureWireguardInterface(config); err != nil {
@@ -328,7 +334,10 @@ func (s *WireGuardService) ensureWireguardInterface(wgconfig WgConfig) error {
 	// Check if the interface already exists
 	_, err = s.wgClient.Device(s.interfaceName)
 	if err != nil {
-		return fmt.Errorf("interface %s does not exist", s.interfaceName)
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("interface %s does not exist", s.interfaceName)
+		}
+		return fmt.Errorf("failed to get device: %v", err)
 	}
 
 	// Parse the private key
@@ -447,7 +456,7 @@ func (s *WireGuardService) ensureWireguardPeers(peers []Peer) error {
 }
 
 func (s *WireGuardService) handleAddPeer(msg websocket.WSMessage) {
-	logger.Info("Received message: %v", msg.Data)
+	logger.Debug("Received message: %v", msg.Data)
 	var peer Peer
 
 	jsonData, err := json.Marshal(msg.Data)
@@ -520,7 +529,7 @@ func (s *WireGuardService) addPeer(peer Peer) error {
 }
 
 func (s *WireGuardService) handleRemovePeer(msg websocket.WSMessage) {
-	logger.Info("Received message: %v", msg.Data)
+	logger.Debug("Received message: %v", msg.Data)
 	// parse the publicKey from the message which is json { "publicKey": "asdfasdfl;akjsdf" }
 	type RemoveRequest struct {
 		PublicKey string `json:"publicKey"`
@@ -568,7 +577,7 @@ func (s *WireGuardService) removePeer(publicKey string) error {
 }
 
 func (s *WireGuardService) handleUpdatePeer(msg websocket.WSMessage) {
-	logger.Info("Received message: %v", msg.Data)
+	logger.Debug("Received message: %v", msg.Data)
 	// Define a struct to match the incoming message structure with optional fields
 	type UpdatePeerRequest struct {
 		PublicKey  string   `json:"publicKey"`
@@ -948,34 +957,4 @@ func (s *WireGuardService) removeInterface() error {
 	logger.Info("WireGuard interface %s removed successfully", s.interfaceName)
 
 	return nil
-}
-
-func (s *WireGuardService) sendGetConfigMessage() error {
-	err := s.client.SendMessage("newt/wg/get-config", map[string]interface{}{
-		"publicKey": fmt.Sprintf("%s", s.key.PublicKey().String()),
-		"port":      s.Port,
-	})
-	if err != nil {
-		logger.Error("Failed to send get-config message: %v", err)
-		return err
-	}
-	logger.Info("Requesting WireGuard configuration from remote server")
-	return nil
-}
-
-func (s *WireGuardService) keepSendingGetConfig() {
-	ticker := time.NewTicker(3 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-s.stopGetConfig:
-			logger.Info("Stopping get-config messages")
-			return
-		case <-ticker.C:
-			if err := s.sendGetConfigMessage(); err != nil {
-				logger.Error("Failed to send periodic get-config: %v", err)
-			}
-		}
-	}
 }

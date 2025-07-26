@@ -104,10 +104,10 @@ func main() {
 	dns = os.Getenv("DNS")
 	logLevel = os.Getenv("LOG_LEVEL")
 	updownScript = os.Getenv("UPDOWN_SCRIPT")
-	// interfaceName = os.Getenv("INTERFACE")
-	// generateAndSaveKeyTo = os.Getenv("GENERATE_AND_SAVE_KEY_TO")
-	// rm = os.Getenv("RM") == "true"
-	// acceptClients = os.Getenv("ACCEPT_CLIENTS") == "true"
+	interfaceName = os.Getenv("INTERFACE")
+	generateAndSaveKeyTo = os.Getenv("GENERATE_AND_SAVE_KEY_TO")
+	rm = os.Getenv("RM") == "true"
+	acceptClients = os.Getenv("ACCEPT_CLIENTS") == "true"
 	tlsPrivateKey = os.Getenv("TLS_CLIENT_CERT")
 	dockerSocket = os.Getenv("DOCKER_SOCKET")
 	pingIntervalStr := os.Getenv("PING_INTERVAL")
@@ -136,14 +136,14 @@ func main() {
 	if updownScript == "" {
 		flag.StringVar(&updownScript, "updown", "", "Path to updown script to be called when targets are added or removed")
 	}
-	// if interfaceName == "" {
-	// 	flag.StringVar(&interfaceName, "interface", "wg1", "Name of the WireGuard interface")
-	// }
-	// if generateAndSaveKeyTo == "" {
-	// 	flag.StringVar(&generateAndSaveKeyTo, "generateAndSaveKeyTo", "/tmp/newtkey", "Path to save generated private key")
-	// }
-	// flag.BoolVar(&rm, "rm", false, "Remove the WireGuard interface")
-	// flag.BoolVar(&acceptClients, "accept-clients", false, "Accept clients on the WireGuard interface")
+	if interfaceName == "" {
+		flag.StringVar(&interfaceName, "interface", "wg1", "Name of the WireGuard interface")
+	}
+	if generateAndSaveKeyTo == "" {
+		flag.StringVar(&generateAndSaveKeyTo, "generateAndSaveKeyTo", "/tmp/newtkey", "Path to save generated private key")
+	}
+	flag.BoolVar(&rm, "rm", false, "Remove the WireGuard interface")
+	flag.BoolVar(&acceptClients, "accept-clients", false, "Accept clients on the WireGuard interface")
 	if tlsPrivateKey == "" {
 		flag.StringVar(&tlsPrivateKey, "tls-client-cert", "", "Path to client certificate used for mTLS")
 	}
@@ -154,7 +154,7 @@ func main() {
 		flag.StringVar(&pingIntervalStr, "ping-interval", "3s", "Interval for pinging the server (default 3s)")
 	}
 	if pingTimeoutStr == "" {
-		flag.StringVar(&pingTimeoutStr, "ping-timeout", "5s", "	Timeout for each ping (default 3s)")
+		flag.StringVar(&pingTimeoutStr, "ping-timeout", "5s", "	Timeout for each ping (default 5s)")
 	}
 
 	if pingIntervalStr != "" {
@@ -228,6 +228,7 @@ func main() {
 	}
 	// Create a new client
 	client, err := websocket.NewClient(
+		"newt",
 		id,     // CLI arg takes precedence
 		secret, // CLI arg takes precedence
 		endpoint,
